@@ -1,5 +1,12 @@
-import { useState, type ReactNode } from 'react'
-import { regions, scenarios, stageProbabilities, type RegionSelection, type Scenario } from './demoData'
+import { useState, type ChangeEvent, type ReactNode } from 'react'
+import {
+  regions,
+  scenarios,
+  stageProbabilities,
+  stages,
+  type RegionSelection,
+  type Scenario,
+} from './demoData'
 import {
   getDataIssues,
   getForecastMetrics,
@@ -8,208 +15,302 @@ import {
   getPipelineStages,
   getRegionalComparison,
   getScenarioComparison,
+  getStageProbability,
   getWeakestTransition,
-  type ForecastMetrics,
 } from './metrics'
 import './App.css'
 
 type View = 'overview' | 'conversion' | 'forecast'
+type IconName = 'overview' | 'funnel' | 'forecast' | 'arrow' | 'target' | 'alert' | 'check'
 
-const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 2 })
-const integer = new Intl.NumberFormat('en-US')
+const dollars = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 2,
+})
+const whole = new Intl.NumberFormat('en-US')
 
-function money(value: number): string { return usd.format(value) }
-function pct(value: number | null): string { return value === null ? 'N/A' : `${(value * 100).toFixed(1)}%` }
+function money(value: number): string { return dollars.format(value) }
+function percent(value: number | null): string { return value === null ? 'N/A' : `${(value * 100).toFixed(1)}%` }
 function signedMoney(value: number): string { return `${value < 0 ? '−' : '+'}${money(Math.abs(value))}` }
-function selectedRegion(value: string): value is RegionSelection { return value === 'All Regions' || regions.some((region) => region === value) }
-function selectedScenario(value: string): value is Scenario { return scenarios.some((scenario) => scenario === value) }
-function barWidth(value: number, scale: number): string { return `${Math.max(0, Math.min(100, scale > 0 ? value / scale * 100 : 0))}%` }
+function widthFor(value: number, max: number): string { return `${Math.max(0, Math.min(100, max > 0 ? value / max * 100 : 0))}%` }
+function validRegion(value: string): value is RegionSelection { return value === 'All Regions' || regions.some((item) => item === value) }
+function validScenario(value: string): value is Scenario { return scenarios.some((item) => item === value) }
 
-function Kpi({ label, value, note, trend = 'neutral' }: {
+function Icon({ name, size = 19 }: { name: IconName; size?: number }) {
+  const common = { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.9, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true as const }
+  switch (name) {
+    case 'overview': return <svg {...common}><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>
+    case 'funnel': return <svg {...common}><path d="M3 4h18l-7 8v6l-4 2v-8L3 4Z"/><path d="M8 8h8"/></svg>
+    case 'forecast': return <svg {...common}><path d="M3 20h18M6 16l5-5 4 3 5-8"/><path d="M15 6h5v5"/></svg>
+    case 'arrow': return <svg {...common}><path d="M5 18 19 5M9 5h10v10"/></svg>
+    case 'target': return <svg {...common}><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></svg>
+    case 'alert': return <svg {...common}><path d="m12 3 10 18H2L12 3Z"/><path d="M12 10v4m0 3h.01"/></svg>
+    case 'check': return <svg {...common}><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+  }
+}
+
+function Metric({ label, value, detail, tone = 'default' }: {
   label: string
   value: string
-  note: string
-  trend?: 'positive' | 'negative' | 'neutral'
-}) {
-  return <article className="kpi"><p className="kpi-label">{label}</p><strong className="kpi-value">{value}</strong><p className={`kpi-note ${trend}`}>{note}</p></article>
-}
-
-function Panel({ title, detail, children }: { title: string; detail: string; children: ReactNode }) {
-  return <section className="panel"><header className="panel-head"><h3>{title}</h3><p>{detail}</p></header>{children}</section>
-}
-
-function ProgressRow({ name, value, scale, detail, secondary }: {
-  name: string
-  value: number
-  scale: number
   detail: string
-  secondary?: boolean
+  tone?: 'default' | 'risk' | 'good'
 }) {
-  return <div className="progress-row"><div className="progress-top"><span>{name}</span><strong>{detail}</strong></div><div className="progress-track" aria-hidden="true"><div className={secondary ? 'progress-fill secondary-fill' : 'progress-fill'} style={{ width: barWidth(value, scale) }} /></div></div>
+  return <article className={`roc-metric roc-metric-${tone}`}>
+    <span className="roc-metric-label">{label}</span>
+    <strong className="roc-metric-value">{value}</strong>
+    <span className="roc-metric-detail">{detail}</span>
+  </article>
 }
 
-function ComparisonRow({ label, actualLabel, actual, targetLabel, target, scale, active }: {
-  label: string
-  actualLabel: string
-  actual: number
-  targetLabel: string
-  target: number
-  scale: number
-  active?: boolean
+function Surface({ title, subtitle, children, className = '' }: {
+  title: string
+  subtitle?: string
+  children: ReactNode
+  className?: string
 }) {
-  return <div className={`comparison-row ${active ? 'comparison-active' : ''}`}>
-    <strong className="comparison-title">{label}</strong>
-    <div className="comparison-line"><span>{actualLabel}</span><div className="progress-track" aria-hidden="true"><div className="progress-fill" style={{ width: barWidth(actual, scale) }} /></div><strong>{money(actual)}</strong></div>
-    <div className="comparison-line"><span>{targetLabel}</span><div className="progress-track" aria-hidden="true"><div className="progress-fill secondary-fill" style={{ width: barWidth(target, scale) }} /></div><strong>{money(target)}</strong></div>
+  return <section className={`roc-surface ${className}`}>
+    <div className="roc-surface-head"><h3>{title}</h3>{subtitle && <p>{subtitle}</p>}</div>
+    {children}
+  </section>
+}
+
+function ExecutiveNote({ label, children, tone = 'neutral' }: {
+  label: string
+  children: ReactNode
+  tone?: 'neutral' | 'caution' | 'good'
+}) {
+  return <div className={`roc-decision roc-decision-${tone}`}>
+    <span className="roc-decision-label">{label}</span>
+    <p>{children}</p>
   </div>
 }
 
-function Insight({ number, children }: { number: string; children: ReactNode }) {
-  return <div className="insight"><span className="insight-number">{number}</span><p>{children}</p></div>
+function ForecastTargetBar({ forecast, target }: { forecast: number; target: number }) {
+  const completion = target > 0 ? forecast / target : 0
+  return <div className="roc-goal">
+    <div className="roc-goal-caption"><strong>{percent(completion)} of target</strong><span>Target {money(target)}</span></div>
+    <div className="roc-goal-track" role="img" aria-label={`${percent(completion)} forecast attainment of ${money(target)} bookings target`}>
+      <div className="roc-goal-fill" style={{ width: widthFor(forecast, target) }}/>
+      <span className="roc-goal-marker" />
+    </div>
+    <div className="roc-goal-foot"><span>0</span><span>100% target</span></div>
+  </div>
 }
 
-function Insights({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="insights"><header className="insights-head"><div><p className="eyebrow">Management interpretation</p><h3>{title}</h3></div><span className="insights-tag">Calculated from synthetic records</span></header><div className="insights-grid">{children}</div></section>
+function StageValueChart({ region, scenario }: { region: RegionSelection; scenario: Scenario }) {
+  const pipeline = getPipelineStages(region, scenario)
+  const max = Math.max(1, ...pipeline.map((item) => item.openValue))
+  const total = getForecastMetrics(region, scenario)
+  return <>
+    <div className="roc-stage-values">
+      {pipeline.map((item) => <div className="roc-stage-value" key={item.stage}>
+        <div className="roc-stage-value-info"><strong>{item.stage}</strong><span>{item.count} open · {money(item.openValue)}</span></div>
+        <div className="roc-stage-value-track" aria-hidden="true"><div style={{ width: widthFor(item.openValue, max) }}/></div>
+        <div className="roc-stage-value-sub">{percent(item.probability)} assumed close probability · {money(item.weightedValue)} weighted</div>
+      </div>)}
+    </div>
+    <p className="roc-footnote">Stage totals reconcile to <strong>{money(total.openPipeline)}</strong> in open pipeline and <strong>{money(total.weightedForecast)}</strong> in scenario-weighted bookings.</p>
+  </>
 }
 
-function GapSummary({ metrics }: { metrics: ForecastMetrics }) {
-  return <>{metrics.forecastGap >= 0
-    ? <><strong>{money(metrics.forecastGap)} above</strong> the Q4 bookings target</>
-    : <><strong>{money(Math.abs(metrics.forecastGap))} below</strong> the Q4 bookings target</>}</>
+function RegionPerformanceTable({ region, scenario }: { region: RegionSelection; scenario: Scenario }) {
+  const rows = getRegionalComparison(scenario)
+  const all = getForecastMetrics('All Regions', scenario)
+  return <div className="roc-table-wrap"><table className="roc-table">
+    <caption className="sr-only">Forecast versus target across all regions using {scenario.toLowerCase()} assumptions</caption>
+    <thead><tr><th scope="col">Territory</th><th scope="col">Open pipeline</th><th scope="col">Weighted forecast</th><th scope="col">Q4 target</th><th scope="col">Gap</th><th scope="col">Attainment</th></tr></thead>
+    <tbody>
+      {rows.map((row) => <tr key={row.region} className={region === row.region ? 'roc-table-selected' : undefined}>
+        <th scope="row">{row.region}{region === row.region && <span className="roc-selected-mark">Selected</span>}</th>
+        <td>{money(row.openPipeline)}</td><td>{money(row.weightedForecast)}</td><td>{money(row.bookingsTarget)}</td>
+        <td className={row.forecastGap < 0 ? 'roc-amount-negative' : 'roc-amount-positive'}>{signedMoney(row.forecastGap)}</td>
+        <td>{percent(row.forecastAttainment)}</td>
+      </tr>)}
+      <tr className="roc-total-row"><th scope="row">Company total</th><td>{money(all.openPipeline)}</td><td>{money(all.weightedForecast)}</td><td>{money(all.bookingsTarget)}</td><td className={all.forecastGap < 0 ? 'roc-amount-negative' : 'roc-amount-positive'}>{signedMoney(all.forecastGap)}</td><td>{percent(all.forecastAttainment)}</td></tr>
+    </tbody>
+  </table></div>
 }
 
 function Overview({ region, scenario }: { region: RegionSelection; scenario: Scenario }) {
-  const metrics = getForecastMetrics(region, scenario)
-  const pipeline = getPipelineStages(region, scenario)
-  const comparisons = getRegionalComparison(scenario)
+  const m = getForecastMetrics(region, scenario)
   const weakest = getWeakestTransition(region)
-  const stageScale = Math.max(1, ...pipeline.map((item) => item.openValue))
-  const regionalScale = Math.max(1, ...comparisons.flatMap((item) => [item.weightedForecast, item.bookingsTarget]))
-  return <section className="view" aria-labelledby="view-heading">
-    <div className="page-head"><div><p className="eyebrow">01 / Executive overview</p><h2 id="view-heading">Commercial Performance Overview</h2><p>Understand open pipeline, expected Q4 bookings, and the distance to target.</p></div><span className="scope-note">Q4 2026 forecast</span></div>
-    <div className="notice">Open opportunities are <strong>not</strong> recognized revenue. Forecast values reflect illustrative stage probabilities and your selected scenario.</div>
-    <div className="kpi-grid">
-      <Kpi label="Open pipeline value" value={money(metrics.openPipeline)} note={`${metrics.opportunityCount} open Q4 opportunities`} />
-      <Kpi label="Weighted bookings forecast" value={money(metrics.weightedForecast)} note={`${scenario} probability assumptions`} />
-      <Kpi label="Forecast-to-target gap" value={signedMoney(metrics.forecastGap)} note={`${pct(metrics.forecastAttainment)} of ${money(metrics.bookingsTarget)} target`} trend={metrics.forecastGap >= 0 ? 'positive' : 'negative'} />
-      <Kpi label="Historical cohort win rate" value={pct(getHistoricalWinRate(region))} note="Resolved historical cohort, not Q4 open deals" />
+  const mostAdvanced = getPipelineStages(region, scenario).filter((stage) => stage.stage === 'Negotiation')[0]
+  const shortfall = Math.max(0, -m.forecastGap)
+  return <section className="roc-view" aria-labelledby="roc-page-title">
+    <div className="roc-heading"><div><p className="roc-eyebrow">01 / Commercial intelligence</p><h1 id="roc-page-title">Revenue Command Center</h1><p>Q4 2026 pipeline exposure, expected bookings, and executive priorities.</p></div><span className="roc-period">Q4 2026 · Illustrative</span></div>
+    <div className="roc-overview-top">
+      <section className="roc-hero" aria-label="Quarterly bookings outlook">
+        <p className="roc-hero-eyebrow">Probability-weighted Q4 bookings · {scenario} scenario</p>
+        <div className="roc-hero-number">{money(m.weightedForecast)}</div>
+        <p className="roc-hero-context">{m.forecastGap < 0 ? `${money(shortfall)} below target` : `${money(m.forecastGap)} above target`} · {region}</p>
+        <ForecastTargetBar forecast={m.weightedForecast} target={m.bookingsTarget}/>
+        <p className="roc-hero-small">A modeled bookings expectation, not recognized revenue or a commitment.</p>
+      </section>
+      <div className="roc-overview-metrics">
+        <Metric label="Open opportunity value" value={money(m.openPipeline)} detail={`${m.opportunityCount} Q4 opportunities`}/>
+        <Metric label="Pipeline coverage" value={m.pipelineCoverage === null ? 'N/A' : `${m.pipelineCoverage.toFixed(2)}×`} detail="Open value / bookings target"/>
+        <Metric label="Historical cohort win rate" value={percent(getHistoricalWinRate(region))} detail="Resolved cohort, separate from Q4"/>
+        <Metric label="Forecast gap" value={signedMoney(m.forecastGap)} detail={m.forecastGap < 0 ? 'Unfavorable · below plan' : 'Favorable · above plan'} tone={m.forecastGap < 0 ? 'risk' : 'good'}/>
+      </div>
     </div>
-    <div className="chart-grid">
-      <Panel title="Open pipeline by stage" detail="Opportunity value by current stage; stage weighting affects forecast, not open value.">
-        <div className="stage-bars">{pipeline.map((item) => <ProgressRow key={item.stage} name={`${item.stage} · ${item.count} opportunities`} value={item.openValue} scale={stageScale} detail={money(item.openValue)} />)}</div>
-        <p className="panel-foot">Sum of stage values: <strong>{money(metrics.openPipeline)}</strong>. Weighted value: <strong>{money(metrics.weightedForecast)}</strong>.</p>
-      </Panel>
-      <Panel title="Regional forecast vs. bookings target" detail="Each region's scenario-weighted forecast reconciles to the selected company total.">
-        <div className="comparisons">{comparisons.map((item) => <ComparisonRow key={item.region} label={item.region} actualLabel="Forecast" actual={item.weightedForecast} targetLabel="Target" target={item.bookingsTarget} scale={regionalScale} active={region === item.region} />)}</div>
-      </Panel>
+    <div className="roc-overview-bottom">
+      <Surface title="Open pipeline by stage" subtitle="Real Q4 opportunity values; probability weighting is shown separately.">
+        <StageValueChart region={region} scenario={scenario}/>
+      </Surface>
+      <Surface title="Executive decision brief" subtitle="Interpretation derived from the selected region and scenario." className="roc-brief-panel">
+        <ExecutiveNote label="01 · Forecast exposure" tone={m.forecastGap < 0 ? 'caution' : 'good'}>
+          {m.forecastGap < 0 ? <>The weighted forecast covers <strong>{percent(m.forecastAttainment)}</strong> of the bookings target, leaving <strong>{money(shortfall)}</strong> of modeled exposure.</> : <>The forecast exceeds the target by <strong>{money(m.forecastGap)}</strong>. Treat the apparent surplus as scenario-dependent.</>}
+        </ExecutiveNote>
+        <ExecutiveNote label="02 · Pipeline maturity">
+          <strong>{mostAdvanced?.count ?? 0} opportunities</strong> are in Negotiation, representing <strong>{money(mostAdvanced?.openValue ?? 0)}</strong> of open pipeline before probability weighting. Review close timing and deal readiness.
+        </ExecutiveNote>
+        <ExecutiveNote label="03 · Management priority">
+          {weakest ? <>The weakest historical progression is into <strong>{weakest.label}</strong> at <strong>{percent(weakest.advancement)}</strong>. Investigate that handoff before assuming faster conversions.</> : <>Historical transition evidence is unavailable for this region.</>}
+        </ExecutiveNote>
+      </Surface>
     </div>
-    <Insights title={`Executive insights · ${region}`}>
-      <Insight number="01">The {scenario.toLowerCase()} forecast is <GapSummary metrics={metrics} /> ({pct(metrics.forecastAttainment)} attainment). The open pipeline alone does not establish likely bookings.</Insight>
-      <Insight number="02">Pipeline coverage is <strong>{metrics.pipelineCoverage === null ? 'N/A' : `${metrics.pipelineCoverage.toFixed(2)}×`}</strong> the Q4 bookings target. Coverage is unweighted and should not be interpreted as close probability.</Insight>
-      <Insight number="03">{weakest ? <>The historical cohort's lowest stage-to-stage advancement was into <strong>{weakest.label}</strong> ({pct(weakest.advancement)}). Review qualification and stalled deals before assuming stronger conversion.</> : 'No historical conversion benchmark is available.'}</Insight>
-    </Insights>
+    <div className="roc-note-bar"><Icon name="alert" size={16}/><span>All records are synthetic. Historical conversion and assumed opportunity close probabilities are different measures.</span></div>
   </section>
 }
 
 function Conversion({ region }: { region: RegionSelection }) {
-  const funnel = getHistoricalFunnel(region)
-  const first = funnel[0]
-  const last = funnel[funnel.length - 1]
+  const steps = getHistoricalFunnel(region)
+  const first = steps[0]?.count ?? 0
+  const last = steps[steps.length - 1]?.count ?? 0
   const weakest = getWeakestTransition(region)
-  const counted = first?.count ?? 0
-  const won = last?.count ?? 0
-  const scale = Math.max(1, counted)
-  const steps = funnel.slice(1)
-  const dropOffTotal = counted - won
-  return <section className="view" aria-labelledby="view-heading">
-    <div className="page-head"><div><p className="eyebrow">02 / Historical funnel</p><h2 id="view-heading">Pipeline Conversion &amp; Bottlenecks</h2><p>Trace a resolved qualification cohort to identify where opportunities stopped progressing.</p></div><span className="scope-note">Historical cohort · completed by Q3 2026</span></div>
-    <div className="notice">This is a <strong>separate historical cohort</strong> from the Q4 open pipeline. Rates measure advancement among these fictional opportunities, not the Q4 forecast probabilities.</div>
-    <div className="kpi-grid">
-      <Kpi label="Originally qualified" value={integer.format(counted)} note="Historical cohort size" />
-      <Kpi label="Ultimately won" value={integer.format(won)} note={`${pct(getHistoricalWinRate(region))} overall cohort win rate`} />
-      <Kpi label="Lowest advancement" value={pct(weakest?.advancement ?? null)} note={weakest ? `Transition into ${weakest.label}` : 'No comparison available'} trend="negative" />
-      <Kpi label="Did not ultimately win" value={integer.format(dropOffTotal)} note="Qualified less eventual wins; not a single-stage loss" />
+  const nonWins = first - last
+  return <section className="roc-view" aria-labelledby="roc-page-title">
+    <div className="roc-heading"><div><p className="roc-eyebrow">02 / Historical conversion analysis</p><h1 id="roc-page-title">Sales Funnel &amp; Bottlenecks</h1><p>Follow one resolved qualification cohort through each successive sales stage.</p></div><span className="roc-period">Completed by Q3 2026</span></div>
+    <div className="roc-micro-grid">
+      <Metric label="Initially qualified" value={whole.format(first)} detail="Historical cohort opportunities"/>
+      <Metric label="Ultimately won" value={whole.format(last)} detail={`${percent(getHistoricalWinRate(region))} of qualified cohort`}/>
+      <Metric label="Lowest stage advancement" value={percent(weakest?.advancement ?? null)} detail={weakest ? `Into ${weakest.label}` : 'Unavailable'} tone="risk"/>
+      <Metric label="Did not win" value={whole.format(nonWins)} detail="Qualified less eventual wins"/>
     </div>
-    <div className="chart-grid conversion-grid">
-      <Panel title="Historical opportunity progression" detail="One cohort, tracked from Qualification through Won. Counts decrease as the cohort advances.">
-        <div className="stage-bars">{funnel.map((item) => <ProgressRow key={item.label} name={item.label} value={item.count} scale={scale} detail={`${integer.format(item.count)} opportunities`} secondary={item.label === 'Won'} />)}</div>
-      </Panel>
-      <Panel title="Stage-to-stage conversion" detail="Each rate uses the immediately preceding stage's count as its denominator.">
-        <div className="transition-list">{steps.map((step, index) => <div className="transition-row" key={step.label}>
-          <div><strong>{funnel[index]?.label} → {step.label}</strong><span>{integer.format(step.dropOffCount ?? 0)} did not advance</span></div>
-          <strong className="conversion-rate">{pct(step.advancement)}</strong>
-        </div>)}</div>
-      </Panel>
+    <div className="roc-funnel-layout">
+      <Surface title="Historical opportunity funnel" subtitle={`Resolved opportunities · ${region} · widths represent the share of originally qualified deals`} className="roc-funnel-panel">
+        <div className="roc-funnel-list" role="group" aria-label="Historical funnel stage counts and conversion rates">
+          {steps.map((step, i) => {
+            const ratio = first > 0 ? step.count / first : 0
+            const blockWidth = `${Math.max(0, Math.min(100, ratio * 100))}%`
+            return <div className="roc-funnel-row" key={step.label}>
+              <div className="roc-funnel-label"><strong>{step.label}</strong><span>{whole.format(step.count)} opportunities</span></div>
+              <div className="roc-funnel-bar-area"><div className={`roc-funnel-shape roc-funnel-shape-${i}`} style={{ width: blockWidth }}><strong>{whole.format(step.count)}</strong></div></div>
+              <div className="roc-funnel-conversion">{i === 0 ? <span>100% baseline</span> : <><strong>{percent(step.advancement)}</strong><span>from prior stage</span></>}</div>
+            </div>
+          })}
+        </div>
+        <p className="roc-footnote">All widths use the same original-cohort denominator. Percentage labels show advancement from the preceding stage, not the share of all qualified opportunities.</p>
+      </Surface>
+      <aside className="roc-intelligence-rail" aria-label="Commercial conversion insights">
+        <Surface title="Conversion risk assessment" subtitle="Evidence-based prompts, not automated causal conclusions.">
+          <div className="roc-risk-summary"><Icon name="alert" size={22}/><div><span>Lowest advancement</span><strong>{weakest ? `${weakest.label} · ${percent(weakest.advancement)}` : 'Unavailable'}</strong></div></div>
+          {weakest && <ExecutiveNote label="Observed cohort loss" tone="caution">The transition into <strong>{weakest.label}</strong> retained <strong>{whole.format(weakest.count)}</strong> opportunities, with <strong>{whole.format(weakest.dropOffCount ?? 0)}</strong> not advancing from the prior stage.</ExecutiveNote>}
+          <ExecutiveNote label="Suggested management review">Inspect stage qualification criteria, opportunity aging, objections, and rep follow-up before assigning a cause to the observed drop-off.</ExecutiveNote>
+          <ExecutiveNote label="Forecast guardrail">Historical funnel advancement is <strong>not</strong> automatically substituted for Q4 opportunity close probabilities.</ExecutiveNote>
+        </Surface>
+      </aside>
     </div>
-    <Insights title={`Conversion insights · ${region}`}>
-      <Insight number="01">The historical cohort progressed from <strong>{integer.format(counted)} qualified</strong> to <strong>{integer.format(won)} wins</strong> ({pct(getHistoricalWinRate(region))} overall).</Insight>
-      <Insight number="02">{weakest ? <>The transition into <strong>{weakest.label}</strong> was the lowest by percentage ({pct(weakest.advancement)}), with {integer.format(weakest.dropOffCount ?? 0)} opportunities not advancing at that step.</> : 'No conversion bottleneck identified.'}</Insight>
-      <Insight number="03">Investigate stage definitions, deal quality, objections, and follow-up discipline. These figures identify a <strong>review priority</strong>, not a proven cause of attrition.</Insight>
-    </Insights>
+    <Surface title="Stage-to-stage conversion detail" subtitle="Transition counts reconcile to the funnel visualization above.">
+      <div className="roc-table-wrap"><table className="roc-table roc-transition-table"><thead><tr><th scope="col">Destination stage</th><th scope="col">Prior stage count</th><th scope="col">Advanced</th><th scope="col">Not advanced</th><th scope="col">Advancement rate</th></tr></thead><tbody>
+        {steps.slice(1).map((step, i) => <tr key={step.label} className={step.label === weakest?.label ? 'roc-table-selected' : undefined}><th scope="row">{step.label}{step.label === weakest?.label && <span className="roc-selected-mark">Lowest</span>}</th><td>{whole.format(steps[i]?.count ?? 0)}</td><td>{whole.format(step.count)}</td><td>{whole.format(step.dropOffCount ?? 0)}</td><td>{percent(step.advancement)}</td></tr>)}
+      </tbody></table></div>
+    </Surface>
+    <div className="roc-note-bar"><Icon name="check" size={16}/><span>Historical cohorts are synthetic and separate from the Q4 open opportunity snapshot. This is a conversion analysis, not a predictive model.</span></div>
   </section>
+}
+
+function ScenarioComparison({ region, active }: { region: RegionSelection; active: Scenario }) {
+  const variants = getScenarioComparison(region)
+  const scale = Math.max(1, ...variants.flatMap((item) => [item.weightedForecast, item.bookingsTarget]))
+  return <div className="roc-scenario-bars">
+    {variants.map((item) => <div className={`roc-scenario-row ${item.scenario === active ? 'roc-scenario-active' : ''}`} key={item.scenario}>
+      <div className="roc-scenario-head"><strong>{item.scenario}</strong><span>{money(item.weightedForecast)} · {percent(item.forecastAttainment)} of target</span></div>
+      <div className="roc-comparison-track" aria-hidden="true"><div className="roc-comparison-fill" style={{ width: widthFor(item.weightedForecast, scale) }}/><span className="roc-comparison-target" style={{ left: widthFor(item.bookingsTarget, scale) }}/></div>
+      <p className={item.forecastGap < 0 ? 'roc-amount-negative' : 'roc-amount-positive'}>{signedMoney(item.forecastGap)} against {money(item.bookingsTarget)} target</p>
+    </div>)}
+    <div className="roc-legend"><span><i className="roc-legend-forecast"/>Weighted forecast</span><span><i className="roc-legend-target"/>Bookings target marker</span></div>
+  </div>
 }
 
 function Forecast({ region, scenario }: { region: RegionSelection; scenario: Scenario }) {
-  const metrics = getForecastMetrics(region, scenario)
-  const variants = getScenarioComparison(region)
-  const stagesSummary = getPipelineStages(region, scenario)
-  const scale = Math.max(1, metrics.bookingsTarget, ...variants.map((item) => item.weightedForecast))
-  const targetGap = Math.max(0, -metrics.forecastGap)
-  const uplift = metrics.weightedForecast > 0 ? targetGap / metrics.weightedForecast : null
-  return <section className="view" aria-labelledby="view-heading">
-    <div className="page-head"><div><p className="eyebrow">03 / Decision scenarios</p><h2 id="view-heading">Commercial Forecast &amp; Decision Scenarios</h2><p>Stress-test assumptions and determine how far the weighted forecast is from Q4 goals.</p></div><span className="scope-note">Illustrative Q4 2026 bookings</span></div>
-    <div className="notice">Scenario multipliers modify <strong>assumed close probabilities</strong>. They do not change historical conversion rates or actual opportunity values.</div>
-    <div className="kpi-grid">
-      <Kpi label={`${scenario} forecast`} value={money(metrics.weightedForecast)} note="Probability-weighted expected bookings" />
-      <Kpi label="Q4 bookings target" value={money(metrics.bookingsTarget)} note={`${region} · synthetic objective`} />
-      <Kpi label="Forecast shortfall / surplus" value={signedMoney(metrics.forecastGap)} note={metrics.forecastGap >= 0 ? 'At or above target' : 'Below target'} trend={metrics.forecastGap >= 0 ? 'positive' : 'negative'} />
-      <Kpi label="Pipeline coverage" value={metrics.pipelineCoverage === null ? 'N/A' : `${metrics.pipelineCoverage.toFixed(2)}×`} note="Unweighted open pipeline ÷ target" />
+  const m = getForecastMetrics(region, scenario)
+  const comparison = getScenarioComparison(region)
+  const low = comparison.find((item) => item.scenario === 'Conservative')
+  const high = comparison.find((item) => item.scenario === 'Upside')
+  const weak = getWeakestTransition(region)
+  const gap = Math.max(0, -m.forecastGap)
+  const requiredUplift = m.weightedForecast > 0 ? gap / m.weightedForecast : null
+  return <section className="roc-view" aria-labelledby="roc-page-title">
+    <div className="roc-heading"><div><p className="roc-eyebrow">03 / Commercial planning workspace</p><h1 id="roc-page-title">Forecast &amp; Territory Review</h1><p>Test scenario assumptions and prioritize the regions with the largest planning gaps.</p></div><span className="roc-period">Q4 2026 bookings</span></div>
+    <div className="roc-forecast-head">
+      <div className="roc-forecast-summary"><span>SELECTED WEIGHTED FORECAST · {scenario.toUpperCase()}</span><strong>{money(m.weightedForecast)}</strong><small>{region} · {percent(m.forecastAttainment)} of {money(m.bookingsTarget)} target</small></div>
+      <div className="roc-forecast-summary roc-forecast-summary-cyan"><span>OPEN PIPELINE EXPOSURE</span><strong>{money(m.openPipeline)}</strong><small>{m.opportunityCount} opportunities · unweighted</small></div>
+      <div className="roc-forecast-gap"><span>Forecast gap</span><strong className={m.forecastGap < 0 ? 'roc-amount-negative' : 'roc-amount-positive'}>{signedMoney(m.forecastGap)}</strong><small>{m.forecastGap < 0 ? 'Below the bookings target' : 'At or above the bookings target'}</small></div>
     </div>
-    <div className="chart-grid">
-      <Panel title="Scenario comparison" detail="Same open opportunities and targets under three alternative close-probability assumptions.">
-        <div className="comparisons">{variants.map((item) => <ComparisonRow key={item.scenario} label={item.scenario} actualLabel="Forecast" actual={item.weightedForecast} targetLabel="Target" target={item.bookingsTarget} scale={scale} active={item.scenario === scenario} />)}</div>
-      </Panel>
-      <Panel title="Assumptions applied by sales stage" detail="Base probability × scenario multiplier, with an upper bound of 100%.">
-        <div className="assumption-table" role="table" aria-label="Stage close probabilities">
-          <div className="assumption-heading" role="row"><span role="columnheader">Stage</span><span role="columnheader">Base</span><span role="columnheader">Selected</span></div>
-          {stagesSummary.map((item) => <div className="assumption-row" role="row" key={item.stage}><span role="cell">{item.stage}</span><span role="cell">{pct(stageProbabilities[item.stage])}</span><strong role="cell">{pct(item.probability)}</strong></div>)}
-        </div>
-        <p className="panel-foot">Conservative: 0.85× · Base: 1.00× · Upside: 1.15×</p>
-      </Panel>
+    <div className="roc-territory-layout">
+      <Surface title="Territory plan summary" subtitle="All regions remain visible for comparison; selected region is highlighted. Values reconcile to company totals." className="roc-territory-main">
+        <RegionPerformanceTable region={region} scenario={scenario}/>
+        <p className="roc-footnote">Regional bookings targets are fictional. The forecast values are stage-weighted expected bookings, not recognized revenue.</p>
+      </Surface>
+      <Surface title="Executive planning brief" subtitle="Actionable interpretation of the current selection." className="roc-planning-brief">
+        <ExecutiveNote label="Target exposure" tone={m.forecastGap < 0 ? 'caution' : 'good'}>{m.forecastGap < 0 ? <><strong>{money(gap)}</strong> in weighted expected bookings separates the {scenario.toLowerCase()} forecast from the target.</> : <>The selected assumptions put forecast expected bookings <strong>{money(m.forecastGap)}</strong> above plan.</>}</ExecutiveNote>
+        <ExecutiveNote label="Scenario sensitivity">Across scenarios for {region}, weighted bookings range from <strong>{money(low?.weightedForecast ?? 0)}</strong> to <strong>{money(high?.weightedForecast ?? 0)}</strong>. This is an assumption range, not a confidence interval.</ExecutiveNote>
+        <ExecutiveNote label="Priority review">{weak ? <>Historical advancement into <strong>{weak.label}</strong> is lowest at <strong>{percent(weak.advancement)}</strong>. Review progression and deal readiness before raising close probabilities.</> : 'Historical progression detail is unavailable.'}</ExecutiveNote>
+      </Surface>
     </div>
-    <Insights title={`Management decisions · ${region} · ${scenario}`}>
-      <Insight number="01">The weighted forecast is <strong>{money(metrics.weightedForecast)}</strong> against a <strong>{money(metrics.bookingsTarget)}</strong> target, leaving {metrics.forecastGap < 0 ? <><strong>{money(targetGap)}</strong> to close</> : <><strong>{money(metrics.forecastGap)}</strong> of forecast headroom</>}.</Insight>
-      <Insight number="02">{metrics.forecastGap < 0 ? <>Closing the forecast gap would require an uplift equivalent to <strong>{uplift === null ? 'N/A' : pct(uplift)}</strong> of the current weighted forecast, holding target constant. This is a sizing calculation, not an attainable conversion prediction.</> : <>On these assumptions the target is met. Monitor stage probability changes and expected close dates before treating the surplus as secured bookings.</>}</Insight>
-      <Insight number="03">Use the historical funnel to focus coaching and deal reviews; validate proposal quality and closing timelines before changing forecast probabilities. <strong>Scenario outcomes are not commitments.</strong></Insight>
-    </Insights>
+    <div className="roc-forecast-bottom">
+      <Surface title="Scenario impact on bookings" subtitle="Identical Q4 opportunities under conservative, base, and upside probability assumptions.">
+        <ScenarioComparison region={region} active={scenario}/>
+      </Surface>
+      <Surface title="Close-probability assumptions" subtitle="Stage probabilities are synthetic; scenario multipliers are 0.85×, 1.00×, and 1.15×.">
+        <div className="roc-table-wrap"><table className="roc-table roc-prob-table"><thead><tr><th scope="col">Current stage</th><th scope="col">Base</th><th scope="col">{scenario}</th></tr></thead><tbody>{stages.map((stage) => <tr key={stage}><th scope="row">{stage}</th><td>{percent(stageProbabilities[stage])}</td><td><strong>{percent(getStageProbability(stage, scenario))}</strong></td></tr>)}</tbody></table></div>
+        <p className="roc-footnote">Applied to each opportunity's value; probabilities are capped at 100%. {m.forecastGap < 0 && requiredUplift !== null ? `Closing the current gap is equivalent to ${percent(requiredUplift)} of the selected weighted forecast, not a prediction of achievable growth.` : 'Reevaluate probabilities if opportunity timing or qualification changes.'}</p>
+      </Surface>
+    </div>
   </section>
 }
 
-const views: readonly { key: View; number: string; name: string }[] = [
-  { key: 'overview', number: '01', name: 'Commercial Overview' },
-  { key: 'conversion', number: '02', name: 'Pipeline Conversion' },
-  { key: 'forecast', number: '03', name: 'Forecast & Scenarios' },
+const views: readonly { id: View; title: string; subtitle: string; icon: IconName }[] = [
+  { id: 'overview', title: 'Commercial Overview', subtitle: 'Performance at a glance', icon: 'overview' },
+  { id: 'conversion', title: 'Pipeline Conversion', subtitle: 'Funnel and bottlenecks', icon: 'funnel' },
+  { id: 'forecast', title: 'Forecast & Scenarios', subtitle: 'Territories and planning', icon: 'forecast' },
 ]
 
-function App() {
+export default function App() {
   const [view, setView] = useState<View>('overview')
   const [region, setRegion] = useState<RegionSelection>('All Regions')
   const [scenario, setScenario] = useState<Scenario>('Base')
   const errors = getDataIssues()
   return <div className="roc-app">
-    <header className="site-header"><div className="brand"><img src={`${import.meta.env.BASE_URL}revenue-icon.png`} alt="" width="48" height="48" /><div><strong>Revenue Operations &amp; Commercial Performance</strong><span>Commercial forecasting · Pipeline intelligence · Executive decisions</span></div></div><span className="data-label">SYNTHETIC DATA · DEMONSTRATION</span></header>
-    <div className="workspace">
-      <aside className="sidebar" aria-label="Dashboard navigation"><p className="sidebar-caption">COMMERCIAL INTELLIGENCE</p><nav className="side-links" aria-label="Choose dashboard">{views.map((item) => <button type="button" key={item.key} className={view === item.key ? 'nav-item active' : 'nav-item'} aria-current={view === item.key ? 'page' : undefined} onClick={() => setView(item.key)}><span className="nav-number">{item.number}</span>{item.name}</button>)}</nav><div className="sidebar-company"><strong>Crescent Harbor Business Services</strong><span>Fictional commercial services company</span><span>Q4 2026 illustrative forecast</span></div></aside>
-      <main className="main">
-        <div className="filters"><label>Sales region<select value={region} onChange={(event) => { if (selectedRegion(event.target.value)) setRegion(event.target.value) }}><option value="All Regions">All Regions</option>{regions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{view !== 'conversion' && <label>Forecast scenario<select value={scenario} onChange={(event) => { if (selectedScenario(event.target.value)) setScenario(event.target.value) }}>{scenarios.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>}</div>
-        {errors.length > 0 && <div className="data-error" role="alert"><strong>Synthetic data integrity checks failed.</strong><ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
-        {view === 'overview' && <Overview region={region} scenario={scenario} />}
-        {view === 'conversion' && <Conversion region={region} />}
-        {view === 'forecast' && <Forecast region={region} scenario={scenario} />}
-        <footer className="site-footer"><span>Revenue Operations &amp; Commercial Performance · Portfolio demonstration</span><span>All business records and conclusions are illustrative, not real-world results.</span></footer>
+    <aside className="roc-sidebar" aria-label="Application navigation">
+      <div className="roc-sidebar-brand"><img src={`${import.meta.env.BASE_URL}revenue-icon.png`} width="44" height="44" alt=""/><div><strong>Revenue<span>IQ</span></strong><small>COMMERCIAL INTELLIGENCE</small></div></div>
+      <div className="roc-sidebar-section">WORKSPACE</div>
+      <nav className="roc-navigation" aria-label="Dashboards">
+        {views.map((item) => <button key={item.id} type="button" className={`roc-navigation-item ${view === item.id ? 'roc-navigation-active' : ''}`} onClick={() => setView(item.id)} aria-current={view === item.id ? 'page' : undefined}>
+          <Icon name={item.icon}/><span><strong>{item.title}</strong><small>{item.subtitle}</small></span>
+        </button>)}
+      </nav>
+      <div className="roc-sidebar-bottom"><span className="roc-sidebar-caption">DEMONSTRATION ENTITY</span><strong>Crescent Harbor</strong><p>Business Services · Synthetic Q4 2026 opportunity data</p></div>
+    </aside>
+    <div className="roc-body">
+      <header className="roc-topbar">
+        <div className="roc-topbar-identity"><strong>Revenue Operations &amp; Commercial Performance</strong><span>Executive analytics / portfolio demonstration</span></div>
+        <div className="roc-topbar-actions"><span className="roc-synthetic">SYNTHETIC DATA · DEMO</span><span className="roc-topbar-separator" aria-hidden="true"/><span className="roc-quarter">Q4 2026</span></div>
+      </header>
+      <div className="roc-toolbar"><div><span className="roc-toolbar-label">ANALYSIS WORKSPACE</span><strong>{views.find((item) => item.id === view)?.title}</strong></div><div className="roc-toolbar-filters">
+        <label>Sales region<select value={region} onChange={(event: ChangeEvent<HTMLSelectElement>) => { if (validRegion(event.target.value)) setRegion(event.target.value) }}><option value="All Regions">All Regions</option>{regions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+        {view !== 'conversion' && <label>Forecast scenario<select value={scenario} onChange={(event: ChangeEvent<HTMLSelectElement>) => { if (validScenario(event.target.value)) setScenario(event.target.value) }}>{scenarios.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>}
+      </div></div>
+      <main className="roc-main">
+        {errors.length > 0 && <div className="roc-data-alert" role="alert"><strong>Source data reconciliation requires attention</strong><ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
+        {view === 'overview' && <Overview region={region} scenario={scenario}/>} 
+        {view === 'conversion' && <Conversion region={region}/>} 
+        {view === 'forecast' && <Forecast region={region} scenario={scenario}/>} 
       </main>
+      <footer className="roc-footer"><span>RevenueIQ · Commercial Decision-Support Portfolio</span><span>Fictional company, opportunities, historical outcomes, and assumptions. No live CRM data.</span></footer>
     </div>
   </div>
 }
-
-export default App
