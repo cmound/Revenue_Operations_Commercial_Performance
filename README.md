@@ -92,7 +92,25 @@ To inspect the built application locally, run `npm run preview` after a successf
 
 ## Portfolio screenshots
 
-High-resolution screenshots of the **Revenue Command Center**, **Sales Funnel & Bottlenecks**, and **Forecast & Territory Review** will be added after the deployed application is visually verified. No example dashboard images are used in place of actual application screenshots.
+The images below show the actual interactive application using fictional company records and illustrative Q4 2026 assumptions. They are not design mockups or representations of a live CRM connection.
+
+### 01. Revenue Command Center
+
+![Revenue Command Center showing open pipeline, weighted bookings forecast, scenario target gap, and executive decision support](public/screenshots/revenue-command-center.png)
+
+*Companywide pipeline and forecast visibility, with region and scenario filters.*
+
+### 02. Sales Funnel & Bottlenecks
+
+![Sales Funnel and Bottlenecks dashboard showing historical cohort progression, stage conversion, and management insights](public/screenshots/sales-funnel-bottlenecks.png)
+
+*Historical stage progression is calculated from a separate resolved cohort, not from open Q4 opportunities.*
+
+### 03. Forecast & Territory Review
+
+![Forecast and Territory Review showing regional targets, weighted forecast comparisons, and scenario analysis](public/screenshots/forecast-territory-review.png)
+
+*Territory-level forecast analysis under clearly disclosed Conservative, Base, and Upside assumptions.*
 
 ---
 
